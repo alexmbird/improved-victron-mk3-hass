@@ -72,6 +72,62 @@ you need (such as AC Input Voltage L2) because they are disabled by default.
 - Lit Indicators: mains, absorption, bulk, float, inverter, overload, low_battery, temperature
 - Blinking Indicators: mains, absorption, bulk, float, inverter, overload, low_battery, temperature
 - Firmware Version
+- Device Firmware Version: the VE.Bus device's firmware version (e.g. 509),
+  read at startup
+
+Solar & Wind Priority entities are listed under
+[Prioritize Solar & Wind](#prioritize-solar--wind).
+
+## Prioritize Solar & Wind
+
+[Solar & Wind Priority](https://www.victronenergy.com/upload/documents/Solar_&_Wind_Priority/156386-Solar___Wind_Priority-pdf-en.pdf)
+is a Victron feature that keeps the battery below full so solar and wind can
+top it up. This integration does not set the feature up: configure and enable
+it the usual way, for example with VictronConnect. With the feature enabled,
+the integration gives you a switch to override it and charge to 100% once.
+
+The override needs VE.Bus firmware 506 or later (see Device Firmware Version
+diagnostic entity) and a device that confirms an override may be triggered.
+The integration checks both at startup. If either check fails, or cannot be read, the switch is
+disabled and unavailable; reload the integration after updating the firmware.
+
+Entities:
+
+- Solar & Wind Priority Charge to 100% (switch): on while an override is
+  running. Turning it on starts one and turning it off stops it. It is off
+  while the feature is not enabled and while the device charges to 100%
+  because AC input 1 is connected or a generator is running, and turning it on
+  is refused then. It is unavailable while the state cannot be read.
+- Solar & Wind Priority Enabled (diagnostic): off, on.
+- Solar & Wind Priority Charge Voltage (diagnostic): the voltage the feature
+  holds the battery at.
+- Solar & Wind Priority Charge to 100% Reason (diagnostic): off, one_shot
+  (an override is running), ac_input_or_generator.
+
+
+### Technical Description
+
+How the switch works: it puts the interface in long-frame mode
+(`04 FF 41 01 00`, `02 FF 44`, then `09 FF 53 <s> <l> <h> 01 D0 3E 06` with
+the three state bytes from the `02 FF 44` reply) and holds off polling. It
+then checks the software version reply (0x05) is the long form with firmware
+506 or later, that the setting info for setting 60 (0x35) lists bit 9, and
+that setting 60 (`31 3C 00`) has bit 9 set. It writes setting 60 back to RAM
+only with bit 9 cleared to start or set to stop (`37 03 3C <lo> <hi>`; from
+528, start writes `37 03 3C 10 00` and stop `37 03 3C 10 02`), and returns
+the interface to short-frame mode with `09 FF 53 00 00 00 01 90 00 01`, even
+if a step failed. The device must reply 0x88 and report the new state within
+10 seconds. A failed change is not retried.
+
+The startup read sends `04 FF 41 01 00`, then `05 00 00` and `06 00 00` (the
+low and high halves of the version). Unless the firmware is older than 506, it
+then enters long-frame mode as above, reads the version with 0x05 if either
+short read got no valid reply, reads the setting info for setting 60
+(`35 3C 00`), and returns to short-frame mode. It writes nothing.
+
+The integration only changes the RAM copy of setting 60, never the stored
+(EEPROM) copy, so the unit's configuration is not changed. If the unit is left
+in an unintended state, a power cycle should clear it.
 
 ## Services
 
