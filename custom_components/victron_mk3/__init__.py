@@ -363,6 +363,7 @@ class Controller(Handler):
                     maximum = await transport.read_setting_maximum(PRIORITY_SETTING)
             except InterfaceModeError as e:
                 logger.warning(f"Could not read the device information: {e}")
+        logger.info(f"VE.Bus device version: {version}")
         self.device_firmware = version
         self.priority_override_supported = (
             firmware_supported(version)
