@@ -31,6 +31,7 @@ from victron_mk3 import (
     ACResponse,
     ConfigResponse,
     DCResponse,
+    DeviceState,
     Fault,
     Handler,
     InterfaceFlags,
@@ -192,6 +193,11 @@ class Data:
         self.sustain_voltage: SettingResponse | None = None
         self.priority_state: int | None = None
         self.device_firmware: int | None = None
+
+    def power_assist_active(self) -> bool | None:
+        if self.ac[0] is None:
+            return None
+        return self.ac[0].device_state == DeviceState.POWER_ASSIST
 
     def front_panel_mode(self) -> Mode | None:
         if self.config is None:

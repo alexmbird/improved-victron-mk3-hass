@@ -163,6 +163,17 @@ class StatusDecodeTest(unittest.TestCase):
                 self.assertEqual(integration.priority_state(payload), state)
 
 
+class PowerAssistTest(unittest.TestCase):
+    def test_active(self):
+        DeviceState = integration.DeviceState
+        data = integration.Data()
+        self.assertIsNone(data.power_assist_active())
+        data.ac[0] = types.SimpleNamespace(device_state=DeviceState.POWER_ASSIST)
+        self.assertTrue(data.power_assist_active())
+        data.ac[0] = types.SimpleNamespace(device_state=DeviceState.BYPASS)
+        self.assertFalse(data.power_assist_active())
+
+
 class TransportTest(unittest.TestCase):
     def test_priority_enabled(self):
         for setting_60, enabled in ((528, True), (16, False), (None, None)):

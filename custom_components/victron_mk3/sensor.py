@@ -117,6 +117,10 @@ def priority_override_reason(data: Data) -> str | None:
     return PRIORITY_OVERRIDE_REASONS[state]
 
 
+def on_off(value: bool | None) -> str | None:
+    return None if value is None else ("on" if value else "off")
+
+
 ENTITY_DESCRIPTIONS: tuple[VictronMK3SensorEntityDescription, ...] = (
     VictronMK3SensorEntityDescription(
         key="ac_input_current_limit",
@@ -325,6 +329,15 @@ ENTITY_DESCRIPTIONS: tuple[VictronMK3SensorEntityDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         options=list(PRIORITY_OVERRIDE_REASONS.values()),
         value_fn=priority_override_reason,
+    ),
+    # On while the device state is power_assist.
+    VictronMK3SensorEntityDescription(
+        key="power_assist_active",
+        name="PowerAssist Active",
+        device_class=SensorDeviceClass.ENUM,
+        options=["off", "on"],
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda data: on_off(data.power_assist_active()),
     ),
 )
 
