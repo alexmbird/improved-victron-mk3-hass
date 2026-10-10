@@ -199,6 +199,11 @@ class Data:
             return None
         return self.ac[0].device_state == DeviceState.POWER_ASSIST
 
+    def passthru(self) -> bool | None:
+        if self.ac[0] is None:
+            return None
+        return self.ac[0].device_state == DeviceState.BYPASS
+
     def front_panel_mode(self) -> Mode | None:
         if self.config is None:
             return None

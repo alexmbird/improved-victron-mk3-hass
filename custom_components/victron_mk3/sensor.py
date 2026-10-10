@@ -339,6 +339,15 @@ ENTITY_DESCRIPTIONS: tuple[VictronMK3SensorEntityDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda data: on_off(data.power_assist_active()),
     ),
+    # On while the device state is bypass.
+    VictronMK3SensorEntityDescription(
+        key="passthru",
+        name="Passthru",
+        device_class=SensorDeviceClass.ENUM,
+        options=["off", "on"],
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda data: on_off(data.passthru()),
+    ),
 )
 
 

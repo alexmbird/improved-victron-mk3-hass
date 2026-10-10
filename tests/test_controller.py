@@ -173,6 +173,15 @@ class PowerAssistTest(unittest.TestCase):
         data.ac[0] = types.SimpleNamespace(device_state=DeviceState.BYPASS)
         self.assertFalse(data.power_assist_active())
 
+    def test_passthru(self):
+        DeviceState = integration.DeviceState
+        data = integration.Data()
+        self.assertIsNone(data.passthru())
+        data.ac[0] = types.SimpleNamespace(device_state=DeviceState.BYPASS)
+        self.assertTrue(data.passthru())
+        data.ac[0] = types.SimpleNamespace(device_state=DeviceState.POWER_ASSIST)
+        self.assertFalse(data.passthru())
+
 
 class TransportTest(unittest.TestCase):
     def test_priority_enabled(self):
