@@ -123,11 +123,6 @@ PRIORITY_ACTIVE_BIT = 1 << 24
 PRIORITY_AC_OR_GENERATOR_BITS = (1 << 25) | (1 << 26)
 MIN_VALID_BITS = 26
 
-# Setting 0 (Flags0) bit 5 is AssistEnabled: PowerAssist is enabled in the
-# device's configuration (MK2 protocol 7.3.13.3).
-FLAGS0_SETTING = 0
-ASSIST_ENABLED_BIT = 1 << 5
-
 
 def priority_state(reply: bytes | None) -> int | None:
     """The PRIORITY_STATE_ value in an extended status reply, or None if the
@@ -198,22 +193,6 @@ class Data:
         self.sustain_voltage: SettingResponse | None = None
         self.priority_state: int | None = None
         self.device_firmware: int | None = None
-        # Setting 0 (Flags0), for the PowerAssist enabled bit.
-        self.flags0: SettingResponse | None = None
-
-    def power_assist_enabled(self) -> bool | None:
-        if self.flags0 is None:
-            return None
-        return self.flags0.value & ASSIST_ENABLED_BIT != 0
-
-    def power_assist_available(self) -> bool | None:
-        """PowerAssist is enabled and the device is switched to on, so it is
-        both charging from the AC input and able to invert."""
-        enabled = self.power_assist_enabled()
-        mode = self.actual_mode()
-        if enabled is None or mode is None:
-            return None
-        return enabled and mode == Mode.ON
 
     def power_assist_active(self) -> bool | None:
         if self.ac[0] is None:
@@ -347,7 +326,6 @@ class Controller(Handler):
             self._note_current_limits(data.config)
             data.solar_wind_priority = await self._mk3.send_read_setting_request(60)
             data.sustain_voltage = await self._mk3.send_read_setting_request(88)
-            data.flags0 = await self._mk3.send_read_setting_request(FLAGS0_SETTING)
             data.priority_state = priority_state(
                 await self._w_request_raw(EXTENDED_STATUS_REQUEST)
             )

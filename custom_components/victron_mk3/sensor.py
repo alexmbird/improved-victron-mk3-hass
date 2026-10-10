@@ -330,24 +330,7 @@ ENTITY_DESCRIPTIONS: tuple[VictronMK3SensorEntityDescription, ...] = (
         options=list(PRIORITY_OVERRIDE_REASONS.values()),
         value_fn=priority_override_reason,
     ),
-    # PowerAssist: enabled in the configuration (setting 0 bit 5), available
-    # because the device is also switched on, and active per the device state.
-    VictronMK3SensorEntityDescription(
-        key="power_assist_enabled",
-        name="PowerAssist Enabled",
-        device_class=SensorDeviceClass.ENUM,
-        options=["off", "on"],
-        entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda data: on_off(data.power_assist_enabled()),
-    ),
-    VictronMK3SensorEntityDescription(
-        key="power_assist_available",
-        name="PowerAssist Available",
-        device_class=SensorDeviceClass.ENUM,
-        options=["off", "on"],
-        entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda data: on_off(data.power_assist_available()),
-    ),
+    # On while the device state is power_assist.
     VictronMK3SensorEntityDescription(
         key="power_assist_active",
         name="PowerAssist Active",
