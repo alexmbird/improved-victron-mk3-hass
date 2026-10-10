@@ -553,25 +553,27 @@ class SetRemotePanelStateServiceTest(unittest.TestCase):
             )
         return context.controller.set_remote_panel_state
 
-    def test_current_limit_passed_through(self):
-        for current_limit in (None, 12.5):
-            with self.subTest(current_limit=current_limit):
-                send = self._call(mock.MagicMock(), current_limit=current_limit)
-                send.assert_awaited_once_with(integration.Mode.ON, current_limit)
-
-    def test_keep_current_limit_sends_actual_limit(self):
+    def test_current_limit_sources(self):
         data = mock.MagicMock()
         data.config.actual_current_limit = 4.2
-        send = self._call(data, current_limit=None, keep_current_limit=True)
-        send.assert_awaited_once_with(integration.Mode.ON, 4.2)
+        for kwargs, expected in (
+            ({"current_limit": None}, 4.2),
+            ({"current_limit": 12.5}, 12.5),
+            ({"current_limit": None, "keep_current_limit": True}, 4.2),
+            ({"current_limit": None, "keep_current_limit": False}, None),
+        ):
+            with self.subTest(kwargs=kwargs):
+                send = self._call(data, **kwargs)
+                send.assert_awaited_once_with(integration.Mode.ON, expected)
 
     def test_keep_current_limit_unavailable_raises(self):
         data = mock.MagicMock()
         data.config = None
         for data in (None, data):
             with self.subTest(data=data):
-                with self.assertRaises(HomeAssistantError):
-                    self._call(data, current_limit=None, keep_current_limit=True)
+                for keep in (None, True):
+                    with self.assertRaises(HomeAssistantError):
+                        self._call(data, current_limit=None, keep_current_limit=keep)
 
 
 if __name__ == "__main__":

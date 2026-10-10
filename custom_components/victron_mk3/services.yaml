@@ -30,6 +30,6 @@ set_remote_panel_state:
           mode: box
     keep_current_limit:
       name: Keep current limit
-      description: Keep the device's actual AC input current limit instead of setting a new one. Cannot be used with current limit.
+      description: Keep the device's actual AC input current limit. Defaults to true when current limit is not given. Setting it to false without a current limit resets the limit to the device maximum. Cannot be used with current limit.
       selector:
         boolean:
