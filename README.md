@@ -133,6 +133,8 @@ in an unintended state, a power cycle should clear it.
 
 The `victron_mk3.set_remote_panel_state` service action sets the remote panel mode and
 current limit simultaneously. The mode is required whereas the current limit is optional.
+A current limit below 0 or above the device's maximum (the AC Input Current Limit Maximum
+entity) is rejected and nothing is sent.
 If the current limit is not given, the device's actual current limit is kept: it is read from
 the device just before the mode is sent, and the last current limit this integration sent is
 used instead if that is lower. If the limit cannot be read (for example while the device is

@@ -545,7 +545,9 @@ class SetRemotePanelModeTest(unittest.TestCase):
     @staticmethod
     def _config(actual, dmc=False):
         return types.SimpleNamespace(
-            actual_current_limit=actual, digital_multi_control_dedicated=dmc
+            actual_current_limit=actual,
+            maximum_current_limit=32.0,
+            digital_multi_control_dedicated=dmc,
         )
 
     def test_sends_fresh_actual_limit(self):
@@ -592,6 +594,41 @@ class SetRemotePanelModeTest(unittest.TestCase):
                 with self.assertRaises(HomeAssistantError):
                     asyncio.run(controller.set_remote_panel_mode(integration.Mode.ON))
                 controller._mk3.send_state_request.assert_not_awaited()
+
+    def test_explicit_limit_range(self):
+        for limit in (0, 4.2, 32.0):
+            with self.subTest(limit=limit):
+                controller = self._controller(self._config(4.2))
+                asyncio.run(
+                    controller.set_remote_panel_state(integration.Mode.ON, limit)
+                )
+                controller._mk3.send_state_request.assert_awaited_once_with(
+                    integration.MODE_TO_SWITCH_STATE[integration.Mode.ON], limit
+                )
+        for limit, config in (
+            (32.1, self._config(4.2)),
+            (125, self._config(4.2)),
+            (-1, self._config(4.2)),
+            (float("nan"), self._config(4.2)),
+            (float("inf"), self._config(4.2)),
+            (4.2, None),
+            (4.2, self._config(4.2, dmc=True)),
+        ):
+            with self.subTest(limit=limit, config=config):
+                controller = self._controller(config)
+                with self.assertRaises(HomeAssistantError):
+                    asyncio.run(
+                        controller.set_remote_panel_state(integration.Mode.ON, limit)
+                    )
+                controller._mk3.send_state_request.assert_not_awaited()
+
+    def test_reset_to_max_reads_nothing(self):
+        controller = self._controller(None)
+        asyncio.run(controller.set_remote_panel_state(integration.Mode.ON, None))
+        controller._mk3.send_config_request.assert_not_awaited()
+        controller._mk3.send_state_request.assert_awaited_once_with(
+            integration.MODE_TO_SWITCH_STATE[integration.Mode.ON], None
+        )
 
     def test_holds_io_lock(self):
         controller = self._controller(self._config(4.2))

@@ -25,6 +25,7 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 import logging
+import math
 from typing import List
 from victron_mk3 import (
     ACResponse,
@@ -379,8 +380,24 @@ class Controller(Handler):
     async def set_remote_panel_state(
         self, mode: Mode, current_limit: float | None
     ) -> None:
+        """Sets the remote panel mode and current limit. A current limit of
+        None resets it to the device maximum. Otherwise the limit must be
+        between 0 and the maximum read from the device just before sending,
+        or nothing is sent."""
+        if current_limit is not None and not (
+            math.isfinite(current_limit) and current_limit >= 0
+        ):
+            raise HomeAssistantError(f"Invalid current limit: {current_limit}")
+
         async with self._io_lock:
             await self._ensure_short_frames()
+            if current_limit is not None:
+                config = await self._read_current_limits()
+                if current_limit > config.maximum_current_limit:
+                    raise HomeAssistantError(
+                        f"Current limit {current_limit} A is above the device "
+                        f"maximum of {config.maximum_current_limit} A"
+                    )
             await self._mk3.send_state_request(
                 MODE_TO_SWITCH_STATE[mode], current_limit
             )
@@ -398,21 +415,27 @@ class Controller(Handler):
 
         async with self._io_lock:
             await self._ensure_short_frames()
-            config = await self._mk3.send_config_request()
-            if config is None:
-                raise HomeAssistantError("Could not read the current limit")
-            # A DMC-dedicated reply's current limit bytes are not valid.
-            if config.digital_multi_control_dedicated:
-                raise HomeAssistantError(
-                    "The current limit is controlled by a Digital Multi Control"
-                )
-            current_limit = config.actual_current_limit
+            current_limit = (await self._read_current_limits()).actual_current_limit
             if self._last_sent_current_limit is not None:
                 current_limit = min(current_limit, self._last_sent_current_limit)
             await self._mk3.send_state_request(
                 MODE_TO_SWITCH_STATE[mode], current_limit
             )
             self._last_sent_current_limit = current_limit
+
+    async def _read_current_limits(self) -> ConfigResponse:
+        """Reads the device's current limits, failing if there is no reply or
+        a Digital Multi Control sets them. The caller must hold
+        self._io_lock."""
+        config = await self._mk3.send_config_request()
+        if config is None:
+            raise HomeAssistantError("Could not read the current limit")
+        # A DMC-dedicated reply's current limit bytes are not valid.
+        if config.digital_multi_control_dedicated:
+            raise HomeAssistantError(
+                "The current limit is controlled by a Digital Multi Control"
+            )
+        return config
 
     async def _w_request_raw(self, payload: bytes) -> bytes | None:
         """Sends one request and returns the raw reply payload, or None if there
