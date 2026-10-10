@@ -134,7 +134,8 @@ in an unintended state, a power cycle should clear it.
 The `victron_mk3.set_remote_panel_state` service action sets the remote panel mode and
 current limit simultaneously. The mode is required whereas the current limit is optional.
 If the current limit is not given, the device's actual current limit is kept. To reset the
-current limit to the device's maximum instead, set `keep_current_limit: false`.
+current limit to the device's maximum instead, set `reset_to_max_current_limit: true`. The
+maximum can be far above what your shore or generator supply can provide.
 
 The device id is a unique identifier assigned to the device by Home Assistant. To find this
 value, visit the Developer Tools -> Actions page in the Home Assistant UI, select the
@@ -169,7 +170,7 @@ action: victron_mk3.set_remote_panel_state
 data:
   device_id: 54b361121006d7658fa486a9ebaf02bc
   mode: "on"
-  keep_current_limit: false
+  reset_to_max_current_limit: true
 ```
 
 ## Standby mode

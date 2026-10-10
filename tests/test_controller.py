@@ -559,21 +559,20 @@ class SetRemotePanelStateServiceTest(unittest.TestCase):
         for kwargs, expected in (
             ({"current_limit": None}, 4.2),
             ({"current_limit": 12.5}, 12.5),
-            ({"current_limit": None, "keep_current_limit": True}, 4.2),
-            ({"current_limit": None, "keep_current_limit": False}, None),
+            ({"current_limit": None, "reset_to_max_current_limit": False}, 4.2),
+            ({"current_limit": None, "reset_to_max_current_limit": True}, None),
         ):
             with self.subTest(kwargs=kwargs):
                 send = self._call(data, **kwargs)
                 send.assert_awaited_once_with(integration.Mode.ON, expected)
 
-    def test_keep_current_limit_unavailable_raises(self):
+    def test_actual_limit_unavailable_raises(self):
         data = mock.MagicMock()
         data.config = None
         for data in (None, data):
             with self.subTest(data=data):
-                for keep in (None, True):
-                    with self.assertRaises(HomeAssistantError):
-                        self._call(data, current_limit=None, keep_current_limit=keep)
+                with self.assertRaises(HomeAssistantError):
+                    self._call(data, current_limit=None)
 
 
 if __name__ == "__main__":

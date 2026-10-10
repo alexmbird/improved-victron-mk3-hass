@@ -60,7 +60,7 @@ from .prioritize_wind_and_solar import (
 from .const import (
     AC_PHASES_POLLED,
     CONF_CURRENT_LIMIT,
-    CONF_KEEP_CURRENT_LIMIT,
+    CONF_RESET_TO_MAX_CURRENT_LIMIT,
     CONF_SERIAL_NUMBER,
     DOMAIN,
     KEY_CONTEXT,
@@ -104,7 +104,7 @@ SERVICE_SCHEMA = vol.Schema(
         vol.Required(CONF_DEVICE_ID): cv.string,
         vol.Required(CONF_MODE): vol.In(enum_options(Mode)),
         vol.Exclusive(CONF_CURRENT_LIMIT, "current_limit"): vol.Coerce(float),
-        vol.Exclusive(CONF_KEEP_CURRENT_LIMIT, "current_limit"): cv.boolean,
+        vol.Exclusive(CONF_RESET_TO_MAX_CURRENT_LIMIT, "current_limit"): cv.boolean,
     }
 )
 
@@ -624,9 +624,11 @@ async def _async_setup_services(hass: HomeAssistant) -> None:
         device_id = call.data[CONF_DEVICE_ID]
         mode = mode_from_value(call.data[CONF_MODE])
         current_limit = call.data.get(CONF_CURRENT_LIMIT, None)
-        keep_current_limit = call.data.get(CONF_KEEP_CURRENT_LIMIT, None)
+        reset_to_max_current_limit = call.data.get(
+            CONF_RESET_TO_MAX_CURRENT_LIMIT, False
+        )
         await set_remote_panel_state(
-            hass, device_id, mode, current_limit, keep_current_limit
+            hass, device_id, mode, current_limit, reset_to_max_current_limit
         )
 
     hass.services.async_register(
@@ -642,12 +644,11 @@ async def set_remote_panel_state(
     device_id: str,
     mode: Mode,
     current_limit: float | None,
-    keep_current_limit: bool | None = None,
+    reset_to_max_current_limit: bool = False,
 ) -> None:
     """Sets the remote panel state. Unless a current limit is given or
-    keep_current_limit is False, the device's actual current limit is kept."""
-    if keep_current_limit is None:
-        keep_current_limit = current_limit is None
+    reset_to_max_current_limit is set, the device's actual current limit is
+    kept."""
     device = device_registry.async_get(hass).async_get(device_id)
     if device is None:
         raise DeviceNotFound(f"Device ID {device_id} is not valid")
@@ -656,7 +657,7 @@ async def set_remote_panel_state(
         entry_data = hass.data[DOMAIN].get(entry_id, None)
         if entry_data is not None:
             context = entry_data[KEY_CONTEXT]
-            if keep_current_limit:
+            if current_limit is None and not reset_to_max_current_limit:
                 data = context.coordinator.data
                 if data is None or data.config is None:
                     raise HomeAssistantError("Device is not available")
