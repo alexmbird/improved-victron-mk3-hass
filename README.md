@@ -150,6 +150,12 @@ asleep, or when a Digital Multi Control sets it), nothing is sent and the action
 Remote Panel Mode entity keeps the current limit the same way. To reset the
 current limit to the device's maximum instead, set `reset_to_max_current_limit: true`.
 
+After sending a current limit above 0, the integration reads the device's actual current
+limit back. The device sometimes acknowledges the panel state without applying the limit,
+so the same panel state is sent again, up to three times in all. If the limit is still not
+applied, the action fails. The Remote Panel Current Limit and Remote Panel Mode entities
+check the limit the same way. A reset to the maximum, or a limit of 0, is not checked.
+
 > [!WARNING]
 > Be careful when choosing a current limit.  Do not tell the Victron unit to draw more than
 > your shore supply / generator / etc. can provide.  At best this will trip a breaker; at

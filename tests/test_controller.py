@@ -547,17 +547,38 @@ class DeviceInfoTest(unittest.TestCase):
 
 
 class SetRemotePanelModeTest(unittest.TestCase):
-    def _controller(self, config, maximum=32.0):
+    def setUp(self):
+        patcher = mock.patch.object(integration, "LIMIT_READ_INTERVAL", 0)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _controller(self, config, maximum=32.0, ignored_sends=0):
+        """A controller whose device applies each current limit above 0 it is
+        sent, except the first ignored_sends of them."""
         controller = make_controller()
         controller._maximum_current_limit = maximum
         controller._mk3.send_config_request = mock.AsyncMock(return_value=config)
-        controller._mk3.send_state_request = mock.AsyncMock()
+        ignored = [ignored_sends]
+
+        async def send(switch_state, limit):
+            current = controller._mk3.send_config_request.return_value
+            if current is None or limit is None or limit <= 0:
+                return
+            if ignored[0] > 0:
+                ignored[0] -= 1
+                return
+            controller._mk3.send_config_request.return_value = (
+                types.SimpleNamespace(**{**vars(current), "actual_current_limit": limit})
+            )
+
+        controller._mk3.send_state_request = mock.AsyncMock(side_effect=send)
         return controller
 
     @staticmethod
-    def _config(actual, dmc=False):
+    def _config(actual, dmc=False, minimum=3.6):
         return types.SimpleNamespace(
             actual_current_limit=actual,
+            minimum_current_limit=minimum,
             maximum_current_limit=32.0,
             digital_multi_control_dedicated=dmc,
         )
@@ -565,18 +586,17 @@ class SetRemotePanelModeTest(unittest.TestCase):
     def test_sends_fresh_actual_limit(self):
         controller = self._controller(self._config(4.2))
         asyncio.run(controller.set_remote_panel_mode(integration.Mode.ON))
-        controller._mk3.send_config_request.assert_awaited_once_with()
         controller._mk3.send_state_request.assert_awaited_once_with(
             integration.MODE_TO_SWITCH_STATE[integration.Mode.ON], 4.2
         )
+        # One read before sending, one to check the limit was applied.
+        self.assertEqual(controller._mk3.send_config_request.await_count, 2)
 
     def test_sends_lower_of_actual_and_last_sent(self):
         for last, actual, expected in ((0, 3.6, 0), (4.0, 12.5, 4.0), (12.5, 4.0, 4.0)):
             with self.subTest(last=last, actual=actual):
                 controller = self._controller(self._config(actual))
-                asyncio.run(
-                    controller.set_remote_panel_state(integration.Mode.ON, last)
-                )
+                controller._last_sent_current_limit = last
                 asyncio.run(controller.set_remote_panel_mode(integration.Mode.ON))
                 self.assertEqual(
                     controller._mk3.send_state_request.await_args.args[1], expected
@@ -586,6 +606,7 @@ class SetRemotePanelModeTest(unittest.TestCase):
         controller = self._controller(self._config(12.5))
         asyncio.run(controller.set_remote_panel_state(integration.Mode.ON, 4.0))
         asyncio.run(controller.set_remote_panel_state(integration.Mode.ON, None))
+        controller._mk3.send_config_request.return_value = self._config(12.5)
         asyncio.run(controller.set_remote_panel_mode(integration.Mode.ON))
         self.assertEqual(controller._mk3.send_state_request.await_args.args[1], 12.5)
 
@@ -610,12 +631,12 @@ class SetRemotePanelModeTest(unittest.TestCase):
     def test_explicit_limit_range(self):
         for limit in (0, 4.2, 32.0):
             with self.subTest(limit=limit):
-                # No config reply: the check uses the last known maximum.
-                controller = self._controller(None)
+                # The range check uses the last known maximum, read before
+                # anything is sent.
+                controller = self._controller(self._config(12.5))
                 asyncio.run(
                     controller.set_remote_panel_state(integration.Mode.ON, limit)
                 )
-                controller._mk3.send_config_request.assert_not_awaited()
                 controller._mk3.send_state_request.assert_awaited_once_with(
                     integration.MODE_TO_SWITCH_STATE[integration.Mode.ON], limit
                 )
@@ -639,6 +660,7 @@ class SetRemotePanelModeTest(unittest.TestCase):
         controller = self._controller(
             types.SimpleNamespace(
                 actual_current_limit=4.2,
+                minimum_current_limit=3.6,
                 maximum_current_limit=16.0,
                 digital_multi_control_dedicated=False,
             ),
@@ -648,6 +670,7 @@ class SetRemotePanelModeTest(unittest.TestCase):
         self.assertEqual(controller._maximum_current_limit, 16.0)
         controller._mk3.send_config_request.return_value = types.SimpleNamespace(
             actual_current_limit=0,
+            minimum_current_limit=0,
             maximum_current_limit=0,
             digital_multi_control_dedicated=True,
         )
@@ -655,13 +678,17 @@ class SetRemotePanelModeTest(unittest.TestCase):
             asyncio.run(controller.set_remote_panel_mode(integration.Mode.ON))
         self.assertEqual(controller._maximum_current_limit, 16.0)
 
-    def test_reset_to_max_reads_nothing(self):
-        controller = self._controller(None)
-        asyncio.run(controller.set_remote_panel_state(integration.Mode.ON, None))
-        controller._mk3.send_config_request.assert_not_awaited()
-        controller._mk3.send_state_request.assert_awaited_once_with(
-            integration.MODE_TO_SWITCH_STATE[integration.Mode.ON], None
-        )
+    def test_reset_to_max_and_zero_are_not_checked(self):
+        for limit in (None, 0):
+            with self.subTest(limit=limit):
+                controller = self._controller(None)
+                asyncio.run(
+                    controller.set_remote_panel_state(integration.Mode.ON, limit)
+                )
+                controller._mk3.send_config_request.assert_not_awaited()
+                controller._mk3.send_state_request.assert_awaited_once_with(
+                    integration.MODE_TO_SWITCH_STATE[integration.Mode.ON], limit
+                )
 
     def test_holds_io_lock(self):
         controller = self._controller(self._config(4.2))
@@ -677,7 +704,89 @@ class SetRemotePanelModeTest(unittest.TestCase):
         controller._mk3.send_config_request = config
         controller._mk3.send_state_request = send
         asyncio.run(controller.set_remote_panel_mode(integration.Mode.ON))
-        self.assertEqual(held, [True, True])
+        self.assertEqual(held, [True, True, True])
+
+    def _set(self, controller, path, limit):
+        if path == "state":
+            return controller.set_remote_panel_state(integration.Mode.ON, limit)
+        controller._last_sent_current_limit = limit
+        return controller.set_remote_panel_mode(integration.Mode.ON)
+
+    def test_resends_same_state_until_applied(self):
+        for path in ("state", "mode"):
+            for ignored in (1, integration.STATE_SEND_ATTEMPTS - 1):
+                with self.subTest(path=path, ignored=ignored):
+                    controller = self._controller(
+                        self._config(12.5), ignored_sends=ignored
+                    )
+                    asyncio.run(self._set(controller, path, 4.0))
+                    sends = controller._mk3.send_state_request.await_args_list
+                    self.assertEqual(len(sends), ignored + 1)
+                    for call in sends:
+                        self.assertEqual(
+                            call.args,
+                            (integration.MODE_TO_SWITCH_STATE[integration.Mode.ON], 4.0),
+                        )
+
+    def test_fails_when_never_applied(self):
+        for path in ("state", "mode"):
+            with self.subTest(path=path):
+                controller = self._controller(
+                    self._config(12.5), ignored_sends=integration.STATE_SEND_ATTEMPTS
+                )
+                with self.assertRaises(HomeAssistantError):
+                    asyncio.run(self._set(controller, path, 4.0))
+                self.assertEqual(
+                    controller._mk3.send_state_request.await_count,
+                    integration.STATE_SEND_ATTEMPTS,
+                )
+                self.assertEqual(controller._last_sent_current_limit, 4.0)
+
+    def test_waits_for_limit_before_resending(self):
+        controller = self._controller(self._config(12.5), ignored_sends=1)
+        applied = self._config(4.0)
+        controller._mk3.send_config_request = mock.AsyncMock(
+            side_effect=[None, self._config(12.5), applied]
+        )
+        asyncio.run(controller.set_remote_panel_state(integration.Mode.ON, 4.0))
+        controller._mk3.send_state_request.assert_awaited_once()
+        self.assertEqual(controller._mk3.send_config_request.await_count, 3)
+
+    def test_device_clamps_accepted(self):
+        for limit, actual, minimum in (
+            (2.0, 3.6, 3.6),  # PowerAssist enabled raises it to the minimum
+            (2.0, 2.0, 3.6),  # PowerAssist disabled
+            (4.0, 4.0, 3.6),
+        ):
+            with self.subTest(limit=limit, actual=actual):
+                controller = self._controller(
+                    self._config(actual, minimum=minimum),
+                    ignored_sends=integration.STATE_SEND_ATTEMPTS,
+                )
+                asyncio.run(
+                    controller.set_remote_panel_state(integration.Mode.ON, limit)
+                )
+                controller._mk3.send_state_request.assert_awaited_once()
+
+    def test_wrong_limit_not_accepted(self):
+        for limit, actual in ((4.0, 3.6), (4.0, 4.1), (5.0, 3.6)):
+            with self.subTest(limit=limit, actual=actual):
+                controller = self._controller(
+                    self._config(actual), ignored_sends=integration.STATE_SEND_ATTEMPTS
+                )
+                with self.assertRaises(HomeAssistantError):
+                    asyncio.run(
+                        controller.set_remote_panel_state(integration.Mode.ON, limit)
+                    )
+
+    def test_dmc_while_checking_fails_without_resending(self):
+        controller = self._controller(self._config(12.5), ignored_sends=1)
+        controller._mk3.send_config_request = mock.AsyncMock(
+            return_value=self._config(12.5, dmc=True)
+        )
+        with self.assertRaises(HomeAssistantError):
+            asyncio.run(controller.set_remote_panel_state(integration.Mode.ON, 4.0))
+        controller._mk3.send_state_request.assert_awaited_once()
 
 
 class SetRemotePanelStateServiceTest(unittest.TestCase):
