@@ -12,7 +12,126 @@ This integration lets you build a remote control panel for your charger/inverter
 - The `Remote Panel Current Limit` entity sets the AC input current limit.
 - The `Remote Panel Standby` entity sets whether the device will be prevented from
   sleeping while it is turned off. Refer to the [standby mode](#standby-mode) section for more details.
-- The `victron_mk3.set_remote_panel_state` service action sets the remote panel mode and
+- The `victron_mk3.set_remote_panel_state` service action sets both the panel mode and the
+  current limit simultaneously.
+
+Here's what each remote panel switch state means:
+
+- `on`: Enable the charger and enable the inverter.
+- `charger_only`: Enable the charger and disable the inverter.
+- `inverter_only`: Enable the inverter and disable the charger.
+- `off`: Disable the charger and disable the inverter.
+
+The front panel switch and other inputs on the device may override the remote panel switch state.
+
+- When the device is turned off by the front panel switch or by the remote on/off connection, neither the charger nor the inverter will operate.
+- When the device is forced to charge only mode using the front panel switch, the inverter will not operate regardless of the remote panel switch state set by this interface.
+- Other conditions determined by the device may also apply such as constraints on the mains voltage and battery state of charge.
+
+The device retains the remote panel switch state and current limit set by the MK3 interface even after it has been disconnected from VE.Bus until the device goes to sleep (assuming it is not on standby). To restore the device to its default behavior, set the remote panel mode to `on` and set the current limit to its maximum.
+
+Refer to the [victron-mk3 library](https://github.com/j9brown/victron-mk3) for the list of supported devices.
+
+## Entities
+
+### AC sensors
+
+- AC Input Voltage
+- AC Input Current
+- AC Input Power
+- AC Input Frequency
+- AC Output Voltage
+- AC Output Current
+- AC Output Power
+- AC Output Frequency
+
+If your device has multiple AC phases, you must enable the sensors for the additional phases that
+you need (such as AC Input Voltage L2) because they are disabled by default.
+
+### Battery sensors
+
+- Battery Voltage
+- Battery Input Current
+- Battery Output Current
+- Battery Power
+
+### Configuration entities
+
+- Remote Panel Mode: off, on, charging_only, inverter_only
+- Remote Panel Current Limit
+- Remote Panel Standby: off, on
+
+### Diagnostic entities
+
+- AC Input Current Limit
+- AC Input Current Limit Maximum
+- AC Input Current Limit Minimum
+- Device State: down, startup, off, slave, invert_full, invert_half, invert_aes, power_assist, bypass, state_charge
+- Front Panel Mode: off, on, charging_only
+- Actual Mode: off, on, charging_only, inverter_only
+- Lit Indicators: mains, absorption, bulk, float, inverter, overload, low_battery, temperature
+- Blinking Indicators: mains, absorption, bulk, float, inverter, overload, low_battery, temperature
+- Firmware Version
+- Device Firmware Version: the VE.Bus device's firmware version (e.g. 509),
+  read at startup
+
+Solar & Wind Priority entities are listed under
+[Prioritize Solar & Wind](#prioritize-solar--wind).
+
+## Prioritize Solar & Wind
+
+[Solar & Wind Priority](https://www.victronenergy.com/upload/documents/Solar_&_Wind_Priority/156386-Solar___Wind_Priority-pdf-en.pdf)
+is a Victron feature that keeps the battery below full so solar and wind can
+top it up. This integration does not set the feature up: configure and enable
+it the usual way, for example with VictronConnect. With the feature enabled,
+the integration gives you a switch to override it and charge to 100% once.
+
+The override needs VE.Bus firmware 506 or later (see Device Firmware Version
+diagnostic entity) and a device that confirms an override may be triggered.
+The integration checks both at startup. If either check fails, or cannot be read, the switch is
+disabled and unavailable; reload the integration after updating the firmware.
+
+Entities:
+
+- Solar & Wind Priority Charge to 100% (switch): on while an override is
+  running. Turning it on starts one and turning it off stops it. It is off
+  while the feature is not enabled and while the device charges to 100%
+  because AC input 1 is connected or a generator is running, and turning it on
+  is refused then. It is unavailable while the state cannot be read.
+- Solar & Wind Priority Enabled (diagnostic): off, on.
+- Solar & Wind Priority Charge Voltage (diagnostic): the voltage the feature
+  holds the battery at.
+- Solar & Wind Priority Charge to 100% Reason (diagnostic): off, one_shot
+  (an override is running), ac_input_or_generator.
+
+
+### Technical Description
+
+How the switch works: it puts the interface in long-frame mode
+(`04 FF 41 01 00`, `02 FF 44`, then `09 FF 53 <s> <l> <h> 01 D0 3E 06` with
+the three state bytes from the `02 FF 44` reply) and holds off polling. It
+then checks the software version reply (0x05) is the long form with firmware
+506 or later, that the setting info for setting 60 (0x35) lists bit 9, and
+that setting 60 (`31 3C 00`) has bit 9 set. It writes setting 60 back to RAM
+only with bit 9 cleared to start or set to stop (`37 03 3C <lo> <hi>`; from
+528, start writes `37 03 3C 10 00` and stop `37 03 3C 10 02`), and returns
+the interface to short-frame mode with `09 FF 53 00 00 00 01 90 00 01`, even
+if a step failed. The device must reply 0x88 and report the new state within
+10 seconds. A failed change is not retried.
+
+The startup read sends `04 FF 41 01 00`, then `05 00 00` and `06 00 00` (the
+low and high halves of the version). Unless the firmware is older than 506, it
+then enters long-frame mode as above, reads the version with 0x05 if either
+short read got no valid reply, reads the setting info for setting 60
+(`35 3C 00`), and returns to short-frame mode. It writes nothing.
+
+The integration only changes the RAM copy of setting 60, never the stored
+(EEPROM) copy, so the unit's configuration is not changed. If the unit is left
+in an unintended state, a power cycle should clear it.
+
+## Services
+
+The `victron_mk3.set_remote_panel_state` service action sets the remote panel mode and
 current limit simultaneously. The mode is required whereas the current limit is optional.
 If the current limit is not given, the device's actual current limit is kept. To reset the
 current limit to the device's maximum instead, set `keep_current_limit: false`.
