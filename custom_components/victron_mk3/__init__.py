@@ -171,6 +171,30 @@ SHORT_FRAME_STATE_DATA = [0x00, 0x00, 0x00, 0x01, 0x90, 0x00, 0x01]
 MIN_STATE_REPLY_LENGTH = 7
 
 
+# After sending the remote panel state, the actual current limit is read every
+# LIMIT_READ_INTERVAL seconds, LIMIT_READS_PER_SEND times, before the state is
+# sent again. The state is sent at most STATE_SEND_ATTEMPTS times in all.
+LIMIT_READ_INTERVAL = 0.5
+LIMIT_READS_PER_SEND = 4
+STATE_SEND_ATTEMPTS = 3
+
+
+def _limit_applied(current_limit: float, config: ConfigResponse) -> bool:
+    """Whether a config reply shows the device applied a current limit above
+    0. Compares in tenths of an amp, the unit sent to the device. The device
+    raises a limit below its minimum to the minimum when PowerAssist is
+    enabled, and lowers one above its maximum to the maximum."""
+    sent = min(int(current_limit * 10), 0x7FFF)
+    actual = round(config.actual_current_limit * 10)
+    minimum = round(config.minimum_current_limit * 10)
+    maximum = round(config.maximum_current_limit * 10)
+    if actual == sent:
+        return True
+    if sent < minimum and actual == minimum:
+        return True
+    return sent > maximum and actual == maximum
+
+
 def _reply_word(reply: bytes | None, code: int) -> int | None:
     """The 16-bit value in a reply FF <slot> <code> <lo> <hi>, or None if there
     was no reply or it has a different code."""
@@ -411,16 +435,14 @@ class Controller(Handler):
 
         async with self._io_lock:
             await self._ensure_short_frames()
-            await self._mk3.send_state_request(
-                MODE_TO_SWITCH_STATE[mode], current_limit
-            )
-            self._last_sent_current_limit = current_limit
+            await self._send_state_and_verify(mode, current_limit)
 
     async def set_remote_panel_mode(self, mode: Mode) -> None:
         """Sets the remote panel mode and keeps the current limit. Reads the
         actual current limit from the device just before sending and sends it,
         or the last limit sent by set_remote_panel_state if that is lower.
-        Sends nothing if the limit cannot be read."""
+        Sends nothing if the limit cannot be read. Checks the limit was
+        applied, as set_remote_panel_state does."""
         if self._fault is not None:
             raise HomeAssistantError(f"Communication fault: {self._fault}")
         if self._idle:
@@ -431,10 +453,47 @@ class Controller(Handler):
             current_limit = (await self._read_current_limits()).actual_current_limit
             if self._last_sent_current_limit is not None:
                 current_limit = min(current_limit, self._last_sent_current_limit)
-            await self._mk3.send_state_request(
-                MODE_TO_SWITCH_STATE[mode], current_limit
-            )
-            self._last_sent_current_limit = current_limit
+            await self._send_state_and_verify(mode, current_limit)
+
+    async def _send_state_and_verify(
+        self, mode: Mode, current_limit: float | None
+    ) -> None:
+        """Sends the remote panel state, then reads the actual current limit
+        back. The device sometimes acknowledges the state without applying the
+        limit, so the same state is sent again, up to STATE_SEND_ATTEMPTS
+        times in all, until the limit is applied. Fails if it never is. A
+        limit of None (the device maximum) or 0 is sent once and not checked.
+        The caller must hold self._io_lock."""
+        switch_state = MODE_TO_SWITCH_STATE[mode]
+        await self._mk3.send_state_request(switch_state, current_limit)
+        self._last_sent_current_limit = current_limit
+        if current_limit is None or current_limit <= 0:
+            return
+        actual = None
+        for attempt in range(STATE_SEND_ATTEMPTS):
+            if attempt > 0:
+                logger.warning(
+                    f"Current limit {current_limit} A not applied (device "
+                    f"reports {actual} A); sending the panel state again"
+                )
+                await self._mk3.send_state_request(switch_state, current_limit)
+            for _ in range(LIMIT_READS_PER_SEND):
+                await asyncio.sleep(LIMIT_READ_INTERVAL)
+                config = await self._mk3.send_config_request()
+                self._note_current_limits(config)
+                if config is None:
+                    continue
+                if config.digital_multi_control_dedicated:
+                    raise HomeAssistantError(
+                        "The current limit is controlled by a Digital Multi Control"
+                    )
+                actual = config.actual_current_limit
+                if _limit_applied(current_limit, config):
+                    return
+        raise HomeAssistantError(
+            f"The device did not apply the current limit of {current_limit} A "
+            f"(it reports {actual} A)"
+        )
 
     async def _read_current_limits(self) -> ConfigResponse:
         """Reads the device's current limits, failing if there is no reply or
