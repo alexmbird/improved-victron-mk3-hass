@@ -163,6 +163,41 @@ class StatusDecodeTest(unittest.TestCase):
                 self.assertEqual(integration.priority_state(payload), state)
 
 
+class PowerAssistTest(unittest.TestCase):
+    def test_enabled(self):
+        for flags0, enabled in ((0x0020, True), (0xFFDF, False), (None, None)):
+            data = integration.Data()
+            data.flags0 = None if flags0 is None else SettingResponse(flags0)
+            with self.subTest(flags0=flags0):
+                self.assertEqual(data.power_assist_enabled(), enabled)
+
+    def test_available(self):
+        Mode = integration.Mode
+        for flags0, mode, available in (
+            (0x0020, Mode.ON, True),
+            (0x0020, Mode.CHARGER_ONLY, False),
+            (0x0020, Mode.INVERTER_ONLY, False),
+            (0x0020, Mode.OFF, False),
+            (0x0000, Mode.ON, False),
+            (None, Mode.ON, None),
+            (0x0020, None, None),
+        ):
+            data = integration.Data()
+            data.flags0 = None if flags0 is None else SettingResponse(flags0)
+            data.actual_mode = lambda mode=mode: mode
+            with self.subTest(flags0=flags0, mode=mode):
+                self.assertEqual(data.power_assist_available(), available)
+
+    def test_active(self):
+        DeviceState = integration.DeviceState
+        data = integration.Data()
+        self.assertIsNone(data.power_assist_active())
+        data.ac[0] = types.SimpleNamespace(device_state=DeviceState.POWER_ASSIST)
+        self.assertTrue(data.power_assist_active())
+        data.ac[0] = types.SimpleNamespace(device_state=DeviceState.BYPASS)
+        self.assertFalse(data.power_assist_active())
+
+
 class TransportTest(unittest.TestCase):
     def test_priority_enabled(self):
         for setting_60, enabled in ((528, True), (16, False), (None, None)):

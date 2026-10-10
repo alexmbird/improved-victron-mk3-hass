@@ -65,7 +65,14 @@ you need (such as AC Input Voltage L2) because they are disabled by default.
 
 - AC Input Current Limit
 - AC Input Current Limit Maximum
-- AC Input Current Limit Minimum
+- AC Input Current Limit Minimum: the lowest limit the device applies while
+  PowerAssist is enabled; it has been seen to read 0 in charger-only mode
+- PowerAssist Enabled: off, on; PowerAssist is enabled in the device's
+  configuration
+- PowerAssist Available: off, on; enabled, and the device is switched on so it
+  can assist
+- PowerAssist Active: off, on; the device is assisting now (Device State
+  power_assist)
 - Device State: down, startup, off, slave, invert_full, invert_half, invert_aes, power_assist, bypass, state_charge
 - Front Panel Mode: off, on, charging_only
 - Actual Mode: off, on, charging_only, inverter_only
