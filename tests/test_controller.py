@@ -536,14 +536,13 @@ class DeviceInfoTest(unittest.TestCase):
 
 
 class SetRemotePanelStateServiceTest(unittest.TestCase):
-    def _call(self, data, options=None, **kwargs):
+    def _call(self, data, **kwargs):
         context = mock.MagicMock()
         context.controller.set_remote_panel_state = mock.AsyncMock()
         context.coordinator.async_request_refresh = mock.AsyncMock()
         context.coordinator.data = data
         hass = mock.MagicMock()
         hass.data = {integration.DOMAIN: {"entry": {integration.KEY_CONTEXT: context}}}
-        hass.config_entries.async_get_entry.return_value.options = options or {}
         device = mock.MagicMock(config_entries=["entry"])
         with mock.patch.object(integration, "device_registry") as registry:
             registry.async_get.return_value.async_get.return_value = device
@@ -573,22 +572,6 @@ class SetRemotePanelStateServiceTest(unittest.TestCase):
             with self.subTest(data=data):
                 with self.assertRaises(HomeAssistantError):
                     self._call(data, current_limit=None, keep_current_limit=True)
-
-    def test_option_sets_default(self):
-        data = mock.MagicMock()
-        data.config.actual_current_limit = 4.2
-        on = {integration.CONF_KEEP_CURRENT_LIMIT: True}
-        off = {integration.CONF_KEEP_CURRENT_LIMIT: False}
-        for options, kwargs, expected in (
-            (on, {"current_limit": None}, 4.2),
-            (on, {"current_limit": 12.5}, 12.5),
-            (on, {"current_limit": None, "keep_current_limit": False}, None),
-            (off, {"current_limit": None}, None),
-            (off, {"current_limit": None, "keep_current_limit": True}, 4.2),
-        ):
-            with self.subTest(options=options, kwargs=kwargs):
-                send = self._call(data, options=options, **kwargs)
-                send.assert_awaited_once_with(integration.Mode.ON, expected)
 
 
 if __name__ == "__main__":

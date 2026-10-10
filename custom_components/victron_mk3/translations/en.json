@@ -14,17 +14,5 @@
         }
       }
     }
-  },
-  "options": {
-    "step": {
-      "init": {
-        "data": {
-          "keep_current_limit": "Keep current limit when none is given"
-        },
-        "data_description": {
-          "keep_current_limit": "When set_remote_panel_state is called without current_limit or keep_current_limit, keep the device's actual AC input current limit instead of resetting it to the maximum."
-        }
-      }
-    }
   }
 }
