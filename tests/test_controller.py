@@ -535,5 +535,44 @@ class DeviceInfoTest(unittest.TestCase):
         self.assertEqual(log[-3:], [VERSION, INFO_60, SHORT])
 
 
+class SetRemotePanelStateServiceTest(unittest.TestCase):
+    def _call(self, data, **kwargs):
+        context = mock.MagicMock()
+        context.controller.set_remote_panel_state = mock.AsyncMock()
+        context.coordinator.async_request_refresh = mock.AsyncMock()
+        context.coordinator.data = data
+        hass = mock.MagicMock()
+        hass.data = {integration.DOMAIN: {"entry": {integration.KEY_CONTEXT: context}}}
+        device = mock.MagicMock(config_entries=["entry"])
+        with mock.patch.object(integration, "device_registry") as registry:
+            registry.async_get.return_value.async_get.return_value = device
+            asyncio.run(
+                integration.set_remote_panel_state(
+                    hass, "device", integration.Mode.ON, **kwargs
+                )
+            )
+        return context.controller.set_remote_panel_state
+
+    def test_current_limit_passed_through(self):
+        for current_limit in (None, 12.5):
+            with self.subTest(current_limit=current_limit):
+                send = self._call(mock.MagicMock(), current_limit=current_limit)
+                send.assert_awaited_once_with(integration.Mode.ON, current_limit)
+
+    def test_keep_current_limit_sends_actual_limit(self):
+        data = mock.MagicMock()
+        data.config.actual_current_limit = 4.2
+        send = self._call(data, current_limit=None, keep_current_limit=True)
+        send.assert_awaited_once_with(integration.Mode.ON, 4.2)
+
+    def test_keep_current_limit_unavailable_raises(self):
+        data = mock.MagicMock()
+        data.config = None
+        for data in (None, data):
+            with self.subTest(data=data):
+                with self.assertRaises(HomeAssistantError):
+                    self._call(data, current_limit=None, keep_current_limit=True)
+
+
 if __name__ == "__main__":
     unittest.main()

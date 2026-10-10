@@ -28,3 +28,8 @@ set_remote_panel_state:
           max: 100
           step: any
           mode: box
+    keep_current_limit:
+      name: Keep current limit
+      description: Keep the device's actual AC input current limit instead of setting a new one. Cannot be used with current limit.
+      selector:
+        boolean:
