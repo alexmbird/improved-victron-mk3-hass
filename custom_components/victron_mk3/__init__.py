@@ -25,6 +25,7 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 import logging
+import math
 from typing import List
 from victron_mk3 import (
     ACResponse,
@@ -60,6 +61,7 @@ from .prioritize_wind_and_solar import (
 from .const import (
     AC_PHASES_POLLED,
     CONF_CURRENT_LIMIT,
+    CONF_RESET_TO_MAX_CURRENT_LIMIT,
     CONF_SERIAL_NUMBER,
     DOMAIN,
     KEY_CONTEXT,
@@ -102,7 +104,8 @@ SERVICE_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_DEVICE_ID): cv.string,
         vol.Required(CONF_MODE): vol.In(enum_options(Mode)),
-        vol.Optional(CONF_CURRENT_LIMIT): vol.Coerce(float),
+        vol.Exclusive(CONF_CURRENT_LIMIT, "current_limit"): vol.Coerce(float),
+        vol.Exclusive(CONF_RESET_TO_MAX_CURRENT_LIMIT, "current_limit"): cv.boolean,
     }
 )
 
@@ -250,6 +253,12 @@ class Controller(Handler):
         # replied to the short-frame one. While True, every request first sends
         # the short-frame 'S' frame.
         self._short_frames_pending = False
+        # The last current limit sent with the remote panel state, or None if
+        # none has been sent or the last one was the device maximum.
+        self._last_sent_current_limit: float | None = None
+        # The device's maximum current limit (its hardware rating) from the
+        # last valid config reply, or None if none has been read.
+        self._maximum_current_limit: float | None = None
         self._priority_override = PriorityOverride()
         self._priority_override_transport = _DeviceTransport(self)
 
@@ -308,6 +317,7 @@ class Controller(Handler):
                 )
             data.power = await self._mk3.send_power_request()
             data.config = await self._mk3.send_config_request()
+            self._note_current_limits(data.config)
             data.solar_wind_priority = await self._mk3.send_read_setting_request(60)
             data.sustain_voltage = await self._mk3.send_read_setting_request(88)
             data.priority_state = priority_state(
@@ -374,11 +384,72 @@ class Controller(Handler):
     async def set_remote_panel_state(
         self, mode: Mode, current_limit: float | None
     ) -> None:
+        """Sets the remote panel mode and current limit. A current limit of
+        None resets it to the device maximum. Otherwise the limit must be
+        between 0 and the last maximum read from the device, or nothing is
+        sent."""
+        if current_limit is not None and not (
+            math.isfinite(current_limit) and current_limit >= 0
+        ):
+            raise HomeAssistantError(f"Invalid current limit: {current_limit}")
+
+        if current_limit is not None:
+            maximum = self._maximum_current_limit
+            if maximum is None:
+                raise HomeAssistantError("The device maximum is not known yet")
+            if current_limit > maximum:
+                raise HomeAssistantError(
+                    f"Current limit {current_limit} A is above the device "
+                    f"maximum of {maximum} A"
+                )
+
         async with self._io_lock:
             await self._ensure_short_frames()
             await self._mk3.send_state_request(
                 MODE_TO_SWITCH_STATE[mode], current_limit
             )
+            self._last_sent_current_limit = current_limit
+
+    async def set_remote_panel_mode(self, mode: Mode) -> None:
+        """Sets the remote panel mode and keeps the current limit. Reads the
+        actual current limit from the device just before sending and sends it,
+        or the last limit sent by set_remote_panel_state if that is lower.
+        Sends nothing if the limit cannot be read."""
+        if self._fault is not None:
+            raise HomeAssistantError(f"Communication fault: {self._fault}")
+        if self._idle:
+            raise HomeAssistantError("Device is asleep")
+
+        async with self._io_lock:
+            await self._ensure_short_frames()
+            current_limit = (await self._read_current_limits()).actual_current_limit
+            if self._last_sent_current_limit is not None:
+                current_limit = min(current_limit, self._last_sent_current_limit)
+            await self._mk3.send_state_request(
+                MODE_TO_SWITCH_STATE[mode], current_limit
+            )
+            self._last_sent_current_limit = current_limit
+
+    async def _read_current_limits(self) -> ConfigResponse:
+        """Reads the device's current limits, failing if there is no reply or
+        a Digital Multi Control sets them. The caller must hold
+        self._io_lock."""
+        config = await self._mk3.send_config_request()
+        self._note_current_limits(config)
+        if config is None:
+            raise HomeAssistantError("Could not read the current limit")
+        # A DMC-dedicated reply's current limit bytes are not valid.
+        if config.digital_multi_control_dedicated:
+            raise HomeAssistantError(
+                "The current limit is controlled by a Digital Multi Control"
+            )
+        return config
+
+    def _note_current_limits(self, config: ConfigResponse | None) -> None:
+        """Remembers the maximum current limit from a config reply. A
+        DMC-dedicated reply's current limit bytes are not valid."""
+        if config is not None and not config.digital_multi_control_dedicated:
+            self._maximum_current_limit = config.maximum_current_limit
 
     async def _w_request_raw(self, payload: bytes) -> bytes | None:
         """Sends one request and returns the raw reply payload, or None if there
@@ -622,7 +693,12 @@ async def _async_setup_services(hass: HomeAssistant) -> None:
         device_id = call.data[CONF_DEVICE_ID]
         mode = mode_from_value(call.data[CONF_MODE])
         current_limit = call.data.get(CONF_CURRENT_LIMIT, None)
-        await set_remote_panel_state(hass, device_id, mode, current_limit)
+        reset_to_max_current_limit = call.data.get(
+            CONF_RESET_TO_MAX_CURRENT_LIMIT, False
+        )
+        await set_remote_panel_state(
+            hass, device_id, mode, current_limit, reset_to_max_current_limit
+        )
 
     hass.services.async_register(
         DOMAIN,
@@ -633,8 +709,15 @@ async def _async_setup_services(hass: HomeAssistant) -> None:
 
 
 async def set_remote_panel_state(
-    hass: HomeAssistant, device_id: str, mode: Mode, current_limit: float | None
+    hass: HomeAssistant,
+    device_id: str,
+    mode: Mode,
+    current_limit: float | None,
+    reset_to_max_current_limit: bool = False,
 ) -> None:
+    """Sets the remote panel state. Unless a current limit is given or
+    reset_to_max_current_limit is set, the device's actual current limit is
+    kept."""
     device = device_registry.async_get(hass).async_get(device_id)
     if device is None:
         raise DeviceNotFound(f"Device ID {device_id} is not valid")
@@ -643,7 +726,10 @@ async def set_remote_panel_state(
         entry_data = hass.data[DOMAIN].get(entry_id, None)
         if entry_data is not None:
             context = entry_data[KEY_CONTEXT]
-            await context.controller.set_remote_panel_state(mode, current_limit)
+            if current_limit is None and not reset_to_max_current_limit:
+                await context.controller.set_remote_panel_mode(mode)
+            else:
+                await context.controller.set_remote_panel_state(mode, current_limit)
             await context.coordinator.async_request_refresh()
             return
 
