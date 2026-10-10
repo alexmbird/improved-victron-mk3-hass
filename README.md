@@ -135,22 +135,27 @@ The `victron_mk3.set_remote_panel_state` service action sets the remote panel mo
 current limit simultaneously. The mode is required whereas the current limit is optional.
 A current limit below 0 or above the device's maximum (the AC Input Current Limit Maximum
 entity) is rejected and nothing is sent.
+
+Note: this behaviour changed from the 0.8.0 release.  Formerly the current limit was set to
+the max supported by the unit unless explicitly re-specified - with potentially dangerous
+consequences for equipment.
+
 If the current limit is not given, the device's actual current limit is kept: it is read from
 the device just before the mode is sent, and the last current limit this integration sent is
 used instead if that is lower. If the limit cannot be read (for example while the device is
 asleep, or when a Digital Multi Control sets it), nothing is sent and the action fails. The
 Remote Panel Mode entity keeps the current limit the same way. To reset the
-current limit to the device's maximum instead, set `reset_to_max_current_limit: true`. The
-maximum can be far above what your shore or generator supply can provide.
+current limit to the device's maximum instead, set `reset_to_max_current_limit: true`.
 
-The device id is a unique identifier assigned to the device by Home Assistant. To find this
-value, visit the Developer Tools -> Actions page in the Home Assistant UI, select the
-`victron_mk3.set_remote_panel_state` action, pick the device from the list of targets,
-then view the result in YAML mode.
+> [!WARNING]
+> Be careful when choosing a current limit.  Do not tell the Victron unit to draw more than
+> your shore supply / generator / etc. can provide.  At best this will trip a breaker; at
+> worst it could damage equipment or start a fire.  Always ascertain the safe maximum current
+> for your supply before setting this. 
 
 Here are some examples.
 
-Set the remote panel mode to `on` and keep the actual current limit.
+Set the remote panel mode to `on` and keep the present current limit.
 
 ```yaml
 action: victron_mk3.set_remote_panel_state
@@ -169,7 +174,7 @@ data:
   current_limit: 12.5
 ```
 
-Set the remote panel mode to `on` and the current limit to its maximum.
+Set the remote panel mode to `on` and the current limit to maximum permitted by the unit.
 
 ```yaml
 action: victron_mk3.set_remote_panel_state
