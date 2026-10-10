@@ -256,6 +256,9 @@ class Controller(Handler):
         # The last current limit sent with the remote panel state, or None if
         # none has been sent or the last one was the device maximum.
         self._last_sent_current_limit: float | None = None
+        # The device's maximum current limit (its hardware rating) from the
+        # last valid config reply, or None if none has been read.
+        self._maximum_current_limit: float | None = None
         self._priority_override = PriorityOverride()
         self._priority_override_transport = _DeviceTransport(self)
 
@@ -314,6 +317,7 @@ class Controller(Handler):
                 )
             data.power = await self._mk3.send_power_request()
             data.config = await self._mk3.send_config_request()
+            self._note_current_limits(data.config)
             data.solar_wind_priority = await self._mk3.send_read_setting_request(60)
             data.sustain_voltage = await self._mk3.send_read_setting_request(88)
             data.priority_state = priority_state(
@@ -382,22 +386,25 @@ class Controller(Handler):
     ) -> None:
         """Sets the remote panel mode and current limit. A current limit of
         None resets it to the device maximum. Otherwise the limit must be
-        between 0 and the maximum read from the device just before sending,
-        or nothing is sent."""
+        between 0 and the last maximum read from the device, or nothing is
+        sent."""
         if current_limit is not None and not (
             math.isfinite(current_limit) and current_limit >= 0
         ):
             raise HomeAssistantError(f"Invalid current limit: {current_limit}")
 
+        if current_limit is not None:
+            maximum = self._maximum_current_limit
+            if maximum is None:
+                raise HomeAssistantError("The device maximum is not known yet")
+            if current_limit > maximum:
+                raise HomeAssistantError(
+                    f"Current limit {current_limit} A is above the device "
+                    f"maximum of {maximum} A"
+                )
+
         async with self._io_lock:
             await self._ensure_short_frames()
-            if current_limit is not None:
-                config = await self._read_current_limits()
-                if current_limit > config.maximum_current_limit:
-                    raise HomeAssistantError(
-                        f"Current limit {current_limit} A is above the device "
-                        f"maximum of {config.maximum_current_limit} A"
-                    )
             await self._mk3.send_state_request(
                 MODE_TO_SWITCH_STATE[mode], current_limit
             )
@@ -428,6 +435,7 @@ class Controller(Handler):
         a Digital Multi Control sets them. The caller must hold
         self._io_lock."""
         config = await self._mk3.send_config_request()
+        self._note_current_limits(config)
         if config is None:
             raise HomeAssistantError("Could not read the current limit")
         # A DMC-dedicated reply's current limit bytes are not valid.
@@ -436,6 +444,12 @@ class Controller(Handler):
                 "The current limit is controlled by a Digital Multi Control"
             )
         return config
+
+    def _note_current_limits(self, config: ConfigResponse | None) -> None:
+        """Remembers the maximum current limit from a config reply. A
+        DMC-dedicated reply's current limit bytes are not valid."""
+        if config is not None and not config.digital_multi_control_dedicated:
+            self._maximum_current_limit = config.maximum_current_limit
 
     async def _w_request_raw(self, payload: bytes) -> bytes | None:
         """Sends one request and returns the raw reply payload, or None if there

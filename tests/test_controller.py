@@ -536,8 +536,9 @@ class DeviceInfoTest(unittest.TestCase):
 
 
 class SetRemotePanelModeTest(unittest.TestCase):
-    def _controller(self, config):
+    def _controller(self, config, maximum=32.0):
         controller = make_controller()
+        controller._maximum_current_limit = maximum
         controller._mk3.send_config_request = mock.AsyncMock(return_value=config)
         controller._mk3.send_state_request = mock.AsyncMock()
         return controller
@@ -598,29 +599,50 @@ class SetRemotePanelModeTest(unittest.TestCase):
     def test_explicit_limit_range(self):
         for limit in (0, 4.2, 32.0):
             with self.subTest(limit=limit):
-                controller = self._controller(self._config(4.2))
+                # No config reply: the check uses the last known maximum.
+                controller = self._controller(None)
                 asyncio.run(
                     controller.set_remote_panel_state(integration.Mode.ON, limit)
                 )
+                controller._mk3.send_config_request.assert_not_awaited()
                 controller._mk3.send_state_request.assert_awaited_once_with(
                     integration.MODE_TO_SWITCH_STATE[integration.Mode.ON], limit
                 )
-        for limit, config in (
-            (32.1, self._config(4.2)),
-            (125, self._config(4.2)),
-            (-1, self._config(4.2)),
-            (float("nan"), self._config(4.2)),
-            (float("inf"), self._config(4.2)),
+        for limit, maximum in (
+            (32.1, 32.0),
+            (125, 32.0),
+            (-1, 32.0),
+            (float("nan"), 32.0),
+            (float("inf"), 32.0),
             (4.2, None),
-            (4.2, self._config(4.2, dmc=True)),
         ):
-            with self.subTest(limit=limit, config=config):
-                controller = self._controller(config)
+            with self.subTest(limit=limit, maximum=maximum):
+                controller = self._controller(None, maximum=maximum)
                 with self.assertRaises(HomeAssistantError):
                     asyncio.run(
                         controller.set_remote_panel_state(integration.Mode.ON, limit)
                     )
                 controller._mk3.send_state_request.assert_not_awaited()
+
+    def test_maximum_remembered_from_valid_config(self):
+        controller = self._controller(
+            types.SimpleNamespace(
+                actual_current_limit=4.2,
+                maximum_current_limit=16.0,
+                digital_multi_control_dedicated=False,
+            ),
+            maximum=None,
+        )
+        asyncio.run(controller.set_remote_panel_mode(integration.Mode.ON))
+        self.assertEqual(controller._maximum_current_limit, 16.0)
+        controller._mk3.send_config_request.return_value = types.SimpleNamespace(
+            actual_current_limit=0,
+            maximum_current_limit=0,
+            digital_multi_control_dedicated=True,
+        )
+        with self.assertRaises(HomeAssistantError):
+            asyncio.run(controller.set_remote_panel_mode(integration.Mode.ON))
+        self.assertEqual(controller._maximum_current_limit, 16.0)
 
     def test_reset_to_max_reads_nothing(self):
         controller = self._controller(None)
