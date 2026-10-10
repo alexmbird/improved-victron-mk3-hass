@@ -1,15 +1,27 @@
 from __future__ import annotations
 
 from homeassistant.components import usb
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
 from homeassistant.const import CONF_MODEL, CONF_NAME, CONF_PORT
+from homeassistant.core import callback
 from typing import Any
 from victron_mk3 import ProbeResult, probe
 import voluptuous as vol
 
-from .const import CONF_SERIAL_NUMBER, DOMAIN
+from .const import CONF_KEEP_CURRENT_LIMIT, CONF_SERIAL_NUMBER, DOMAIN
 
 DEFAULT_ENTRY_NAME = "Victron MK3"
+
+OPTIONS_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_KEEP_CURRENT_LIMIT, default=False): bool,
+    }
+)
 
 
 class MK3ConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -20,6 +32,12 @@ class MK3ConfigFlow(ConfigFlow, domain=DOMAIN):
 
     def __init__(self) -> None:
         self._discovery_info: usb.UsbServiceInfo = None
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> MK3OptionsFlow:
+        """Create the options flow."""
+        return MK3OptionsFlow()
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -91,4 +109,20 @@ class MK3ConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="discovery_confirm",
             description_placeholders={"model": self._discovery_info.description},
+        )
+
+
+class MK3OptionsFlow(OptionsFlow):
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Manage the options."""
+        if user_input is not None:
+            return self.async_create_entry(data=user_input)
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=self.add_suggested_values_to_schema(
+                OPTIONS_SCHEMA, self.config_entry.options
+            ),
         )
