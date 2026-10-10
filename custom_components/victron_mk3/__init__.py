@@ -253,9 +253,6 @@ class Controller(Handler):
         # replied to the short-frame one. While True, every request first sends
         # the short-frame 'S' frame.
         self._short_frames_pending = False
-        # The last current limit sent with the remote panel state, or None if
-        # none has been sent or the last one was the device maximum.
-        self._last_sent_current_limit: float | None = None
         self._priority_override = PriorityOverride()
         self._priority_override_transport = _DeviceTransport(self)
 
@@ -401,12 +398,10 @@ class Controller(Handler):
             await self._mk3.send_state_request(
                 MODE_TO_SWITCH_STATE[mode], current_limit
             )
-            self._last_sent_current_limit = current_limit
 
     async def set_remote_panel_mode(self, mode: Mode) -> None:
         """Sets the remote panel mode and keeps the current limit. Reads the
-        actual current limit from the device just before sending and sends it,
-        or the last limit sent by set_remote_panel_state if that is lower.
+        actual current limit from the device just before sending and sends it.
         Sends nothing if the limit cannot be read."""
         if self._fault is not None:
             raise HomeAssistantError(f"Communication fault: {self._fault}")
@@ -416,12 +411,9 @@ class Controller(Handler):
         async with self._io_lock:
             await self._ensure_short_frames()
             current_limit = (await self._read_current_limits()).actual_current_limit
-            if self._last_sent_current_limit is not None:
-                current_limit = min(current_limit, self._last_sent_current_limit)
             await self._mk3.send_state_request(
                 MODE_TO_SWITCH_STATE[mode], current_limit
             )
-            self._last_sent_current_limit = current_limit
 
     async def _read_current_limits(self) -> ConfigResponse:
         """Reads the device's current limits, failing if there is no reply or

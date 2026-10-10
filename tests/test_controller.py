@@ -558,25 +558,6 @@ class SetRemotePanelModeTest(unittest.TestCase):
             integration.MODE_TO_SWITCH_STATE[integration.Mode.ON], 4.2
         )
 
-    def test_sends_lower_of_actual_and_last_sent(self):
-        for last, actual, expected in ((0, 3.6, 0), (4.0, 12.5, 4.0), (12.5, 4.0, 4.0)):
-            with self.subTest(last=last, actual=actual):
-                controller = self._controller(self._config(actual))
-                asyncio.run(
-                    controller.set_remote_panel_state(integration.Mode.ON, last)
-                )
-                asyncio.run(controller.set_remote_panel_mode(integration.Mode.ON))
-                self.assertEqual(
-                    controller._mk3.send_state_request.await_args.args[1], expected
-                )
-
-    def test_reset_to_max_clears_last_sent(self):
-        controller = self._controller(self._config(12.5))
-        asyncio.run(controller.set_remote_panel_state(integration.Mode.ON, 4.0))
-        asyncio.run(controller.set_remote_panel_state(integration.Mode.ON, None))
-        asyncio.run(controller.set_remote_panel_mode(integration.Mode.ON))
-        self.assertEqual(controller._mk3.send_state_request.await_args.args[1], 12.5)
-
     def test_sends_nothing_when_limit_unknown(self):
         cases = {
             "no reply": (self._config(4.2), None),
