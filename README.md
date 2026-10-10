@@ -133,7 +133,11 @@ in an unintended state, a power cycle should clear it.
 
 The `victron_mk3.set_remote_panel_state` service action sets the remote panel mode and
 current limit simultaneously. The mode is required whereas the current limit is optional.
-If the current limit is not given, the device's actual current limit is kept. To reset the
+If the current limit is not given, the device's actual current limit is kept: it is read from
+the device just before the mode is sent, and the last current limit this integration sent is
+used instead if that is lower. If the limit cannot be read (for example while the device is
+asleep, or when a Digital Multi Control sets it), nothing is sent and the action fails. The
+Remote Panel Mode entity keeps the current limit the same way. To reset the
 current limit to the device's maximum instead, set `reset_to_max_current_limit: true`. The
 maximum can be far above what your shore or generator supply can provide.
 

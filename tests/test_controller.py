@@ -535,12 +535,87 @@ class DeviceInfoTest(unittest.TestCase):
         self.assertEqual(log[-3:], [VERSION, INFO_60, SHORT])
 
 
+class SetRemotePanelModeTest(unittest.TestCase):
+    def _controller(self, config):
+        controller = make_controller()
+        controller._mk3.send_config_request = mock.AsyncMock(return_value=config)
+        controller._mk3.send_state_request = mock.AsyncMock()
+        return controller
+
+    @staticmethod
+    def _config(actual, dmc=False):
+        return types.SimpleNamespace(
+            actual_current_limit=actual, digital_multi_control_dedicated=dmc
+        )
+
+    def test_sends_fresh_actual_limit(self):
+        controller = self._controller(self._config(4.2))
+        asyncio.run(controller.set_remote_panel_mode(integration.Mode.ON))
+        controller._mk3.send_config_request.assert_awaited_once_with()
+        controller._mk3.send_state_request.assert_awaited_once_with(
+            integration.MODE_TO_SWITCH_STATE[integration.Mode.ON], 4.2
+        )
+
+    def test_sends_lower_of_actual_and_last_sent(self):
+        for last, actual, expected in ((0, 3.6, 0), (4.0, 12.5, 4.0), (12.5, 4.0, 4.0)):
+            with self.subTest(last=last, actual=actual):
+                controller = self._controller(self._config(actual))
+                asyncio.run(
+                    controller.set_remote_panel_state(integration.Mode.ON, last)
+                )
+                asyncio.run(controller.set_remote_panel_mode(integration.Mode.ON))
+                self.assertEqual(
+                    controller._mk3.send_state_request.await_args.args[1], expected
+                )
+
+    def test_reset_to_max_clears_last_sent(self):
+        controller = self._controller(self._config(12.5))
+        asyncio.run(controller.set_remote_panel_state(integration.Mode.ON, 4.0))
+        asyncio.run(controller.set_remote_panel_state(integration.Mode.ON, None))
+        asyncio.run(controller.set_remote_panel_mode(integration.Mode.ON))
+        self.assertEqual(controller._mk3.send_state_request.await_args.args[1], 12.5)
+
+    def test_sends_nothing_when_limit_unknown(self):
+        cases = {
+            "no reply": (self._config(4.2), None),
+            "dmc": (None, self._config(4.2, dmc=True)),
+            "asleep": ("idle", self._config(4.2)),
+            "fault": ("fault", self._config(4.2)),
+        }
+        for name, (state, config) in cases.items():
+            with self.subTest(case=name):
+                controller = self._controller(config)
+                if state == "idle":
+                    controller._idle = True
+                elif state == "fault":
+                    controller._fault = "fault"
+                with self.assertRaises(HomeAssistantError):
+                    asyncio.run(controller.set_remote_panel_mode(integration.Mode.ON))
+                controller._mk3.send_state_request.assert_not_awaited()
+
+    def test_holds_io_lock(self):
+        controller = self._controller(self._config(4.2))
+        held = []
+
+        async def send(*args):
+            held.append(controller._io_lock.locked())
+
+        async def config():
+            held.append(controller._io_lock.locked())
+            return self._config(4.2)
+
+        controller._mk3.send_config_request = config
+        controller._mk3.send_state_request = send
+        asyncio.run(controller.set_remote_panel_mode(integration.Mode.ON))
+        self.assertEqual(held, [True, True])
+
+
 class SetRemotePanelStateServiceTest(unittest.TestCase):
-    def _call(self, data, **kwargs):
+    def _call(self, **kwargs):
         context = mock.MagicMock()
         context.controller.set_remote_panel_state = mock.AsyncMock()
+        context.controller.set_remote_panel_mode = mock.AsyncMock()
         context.coordinator.async_request_refresh = mock.AsyncMock()
-        context.coordinator.data = data
         hass = mock.MagicMock()
         hass.data = {integration.DOMAIN: {"entry": {integration.KEY_CONTEXT: context}}}
         device = mock.MagicMock(config_entries=["entry"])
@@ -551,28 +626,31 @@ class SetRemotePanelStateServiceTest(unittest.TestCase):
                     hass, "device", integration.Mode.ON, **kwargs
                 )
             )
-        return context.controller.set_remote_panel_state
+        return context.controller
 
-    def test_current_limit_sources(self):
-        data = mock.MagicMock()
-        data.config.actual_current_limit = 4.2
+    def test_keeps_limit_unless_given_or_reset(self):
+        for kwargs in (
+            {"current_limit": None},
+            {"current_limit": None, "reset_to_max_current_limit": False},
+        ):
+            with self.subTest(kwargs=kwargs):
+                controller = self._call(**kwargs)
+                controller.set_remote_panel_mode.assert_awaited_once_with(
+                    integration.Mode.ON
+                )
+                controller.set_remote_panel_state.assert_not_awaited()
+
+    def test_explicit_limit_or_reset(self):
         for kwargs, expected in (
-            ({"current_limit": None}, 4.2),
             ({"current_limit": 12.5}, 12.5),
-            ({"current_limit": None, "reset_to_max_current_limit": False}, 4.2),
             ({"current_limit": None, "reset_to_max_current_limit": True}, None),
         ):
             with self.subTest(kwargs=kwargs):
-                send = self._call(data, **kwargs)
-                send.assert_awaited_once_with(integration.Mode.ON, expected)
-
-    def test_actual_limit_unavailable_raises(self):
-        data = mock.MagicMock()
-        data.config = None
-        for data in (None, data):
-            with self.subTest(data=data):
-                with self.assertRaises(HomeAssistantError):
-                    self._call(data, current_limit=None)
+                controller = self._call(**kwargs)
+                controller.set_remote_panel_state.assert_awaited_once_with(
+                    integration.Mode.ON, expected
+                )
+                controller.set_remote_panel_mode.assert_not_awaited()
 
 
 if __name__ == "__main__":
